@@ -1,77 +1,57 @@
 import os
 import cv2
 import numpy as np
+from PIL import Image
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
+from torchvision import transforms
 
 class ThermalDataset(Dataset):
     """
-    Custom PyTorch Dataset that generates synthetic thermal sensor frames,
-    applies CLAHE constrast enhancement, and prepares tensors for model training.
+    Custom PyTorch Dataset that loads sky-facing imagery, converts them to
+    single-channel grayscale to simulate uncooled Thermal Infrared (TIR) sensors,
+    applies CLAHE edge-enhancement, and assigns binary classification labels.
     """
-    def __init__(self, num_samples=1000, img_size=(128, 128)):
-        self.num_samples = num_samples
-        self.img_size = img_size
+    def __init__(self, image_dir: str, transform=None):
+        self.image_dir = image_dir
+        self.transform = transform
 
-        # Create CLAHE object: Clip Limit controls contrast, TileGridSize sets local grid divisions
-        self.clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # Gather all valid image files from the target directory
+        valid_extensions = ('.png', '.jpg', '.jpeg')
+        self.image_files = [
+            f for f in os.listdir(image_dir)
+            if f.lower().endswith(valid_extensions)
+        ]
 
-        # Randomly assign target classes: 0 = Drone, 1 = Bird
-        self.labels = np.random.randint(0, 2, size=num_samples)
+    def __len__(self) -> int:
+        return len(self.image_files)
 
-    def __len__(self):
-        return self.num_samples
+    def __getitem__(self, idx: int):
+        img_name = self.image_files[idx]
+        img_path = os.path.join(self.image_dir, img_name)
 
-    def _generate_synthetic_thermal_frame(self, label):
-        # 1. Generate noisy grey thermal background (simulating cold sky/clouds)
-        bg = np.random.normal(loc=80, scale=15, size=self.img_size).astype(np.uint8)
+        # 1. Load image in single-channel grayscale (simulating 8-bit thermal sensor output)
+        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            raise FileNotFoundError(f"Unable to read image stream at: {img_path}")
 
-        # 2. Add target signature near the center
-        center = (self.img_size[1] // 2 + np.random.randint(-15, 15),
-                  self.img_size[0] // 2 + np.random.randint(-15, 15))
+        # 2. Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        # This sharpens low-RCS targets and thermal gradients against cloud/sky clutter
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        img = clahe.apply(img)
 
-        if label == 0: # Drone: Angular/box shape with rotors (brighter thermal hot spots)
-            cv2.rectangle(bg, (center[0]-10, center[1]-5), (center[0]+10, center[1]+5), 220, -1)
-            cv2.circle(bg, (center[0]-12, center[1]-5), 4, 255, -1)
-            cv2.circle(bg, (center[0]+12, center[1]-5), 4, 255, -1)
-        else: # Bird: Curved oval shape with wing angle signature
-            cv2.ellipse(bg, center, (12, 5), 30, 0, 360, 180, -1)
+        # 3. Convert processed OpenCV numpy array to a PIL Image format
+        img_pil = Image.fromarray(img)
 
-        # 3. Add Gaussian blur to simulate atmospheric noise and sensor distance
-        blurred = cv2.GaussianBlur(bg, (5, 5), 0)
-        return blurred
+        # 4. Apply torchvision pipeline transforms (Resize, ToTensor, Normalize)
+        if self.transform:
+            img_tensor = self.transform(img_pil)
+        else:
+            img_tensor = transforms.ToTensor()(img_pil)
 
-    def __getitem__(self, idx):
-        label = self.labels[idx]
-        raw_frame = self._generate_synthetic_thermal_frame(label)
+        # 5. Automated Class Labeling Convention:
+        # Class 1: Target Drones (filename contains "target")
+        # Class 0: Background / Birds (all other filenames)
+        label = 1 if "target" in img_name.lower() else 0
 
-        # 4. Apply CLAHE enhancement to make subtle target edges pop
-        enhanced_frame = self.clahe.apply(raw_frame)
-
-        # 5. Normalize pixel value from [0, 255] to [0.0, 1.0] and add channel dimension
-        tensor_frame = torch.tensor(enhanced_frame, dtype=torch.float32).unsqueeze(0) / 255.0
-
-        return tensor_frame, torch.tensor(label, dtype=torch.long)
-
-def get_data_loaders(batch_size=32, num_samples=1000):
-    """
-    Helper function to instantiate and split dataset into Train and Validation loaders.
-    """
-    dataset = ThermalDataset(num_samples=num_samples)
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
-
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-    return train_loader, val_loader
-
-if __name__ == "__main__":
-    # Test execution
-    train_loader, val_loader = get_data_loaders()
-    images, labels = next(iter(train_loader))
-    print(f"Data Loader Test Successful.")
-    print(f"Batch Image Tensor Shape: {images.shape} (Batch Size, Channels, Height, Width)")
-    print(f"Batch Label Tensor Shape: {labels.shape}")
+        return img_tensor, label

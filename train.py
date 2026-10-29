@@ -1,82 +1,103 @@
+import os
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from data_loader import get_data_loaders
+from torch.utils.data import DataLoader
+from torchvision import transforms
+
+import config
 from model import ThermalCNN
+from data_loader import ThermalDataset
 
 def train_model():
-    print("Initializing Thermal CNN Training Pipeline...")
+    """Executes the full training pipeline for the Thermal Target Detector CNN,
+    tracking loss curves and evaluating performance across configured epochs.
+    """
+    start_time = time.time()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 1. Get our training and validation data loaders (Batch size 32, 1000 total samples)
-    train_loader, val_loader = get_data_loaders(batch_size=32, num_samples=1000)
+    print("=" * 60)
+    print(f"[INFO] Initializing Thermal-Target-Detector Training Pipeline")
+    print(f"[INFO] Target Device: {device}")
+    print(f"[INFO] Batch Size: {config.BATCH_SIZE} | Learning Rate: {config.LEARNING_RATE}")
+    print("=" * 60)
 
-    # 2. Instantiate our model, loss function, and optimizer
-    model = ThermalCNN()
+    # Define standard image augmentations and tensor conversions
+    data_transforms = transforms.Compose([
+        transforms.Resize(config.IMAGE_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.5], std=[0.5])
+    ])
 
-    # CrossEntropyLoss is standard for multi-class/binary classification
+    # Locate dataset path
+    dataset_path = os.path.join(os.path.dirname(__file__), "data")
+    if not os.path.exists(dataset_path):
+        print(f"[WARNING] Data directory not found at: {dataset_path}")
+        print("[INFO] Please ensure your training images are placed in a 'data/' folder.")
+        return
+
+    # Instantiate dataset and dataloader
+    dataset = ThermalDataset(image_dir=dataset_path, transform=data_transforms)
+    train_loader = DataLoader(
+        dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=True,
+        drop_last=False
+    )
+
+    print(f"[INFO] Dataset loaded successfully. Total samples: {len(dataset)}")
+
+    # Initialize model, loss criterion, and optimizer
+    model = ThermalCNN().to(device)
     criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
 
-    # Adam optimizer updates the model's weights based on gradients
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Training loop across epochs
+    model.train()
+    print("\n[INFO] Starting model optimization loop...")
 
-    num_epochs = 10
-    print(f"Starting training for {num_epochs} epochs...\n")
-
-    for epoch in range(num_epochs):
-        model.train() # Put model in training mode
+    for epoch in range(config.NUM_EPOCHS):
+        epoch_start = time.time()
         running_loss = 0.0
-        correct_train = 0
-        total_train = 0
+        correct_predictions = 0
+        total_samples = 0
 
-        # Loop through batches of images and labels
         for images, labels in train_loader:
-            # Zero out the gradient buffers from the previous step
+            images, labels = images.to(device), labels.to(device)
+
+            # Zero gradients, forward pass, compute loss, backpropagate, and step optimizer
             optimizer.zero_grad()
-
-            # Forward pass: Compute predictions by passing images through the model
             outputs = model(images)
-
-            # Calculate loss (how wrong the model's predictions were)
             loss = criterion(outputs, labels)
-
-            # Backward pass: Compute gradients
             loss.backward()
-
-            # Update weights
             optimizer.step()
 
-            running_loss += loss.item()
+            # Track metrics
+            running_loss += loss.item() * images.size(0)
+            _, predicted = torch.max(outputs, 1)
+            correct_predictions += (predicted == labels).sum().item()
+            total_samples += labels.size(0)
 
-            # Track training accuracy
-            _, predicted = torch.max(outputs.data, 1)
-            total_train += labels.size(0)
-            correct_train += (predicted == labels).sum().item()
+        epoch_loss = running_loss / total_samples
+        epoch_acc = (correct_predictions / total_samples) * 100.0
+        epoch_duration = time.time() - epoch_start
 
-        epoch_loss = running_loss / len(train_loader)
-        epoch_acc = 100 * correct_train / total_train
+        # Print structured epoch progress
+        print(f"Epoch [{epoch + 1:02d}/{config.NUM_EPOCHS:02d}] | "
+              f"Loss: {epoch_loss:.4f} | "
+              f"Accuracy: {epoch_acc:6.2f}% | "
+              f"Duration: {epoch_duration:.2f}s")
 
-        # Validation phase
-        model.eval() # Put model in evaluation mode
-        correct_val = 0
-        total_val = 0
+    # Save trained model weights to configured destination
+    os.makedirs(os.path.dirname(config.WEIGHTS_PATH), exist_ok=True)
+    torch.save(model.state_dict(), config.WEIGHTS_PATH)
 
-        with torch.no_grad(): # Turn off gradient tracking during validation to save memory
-            for images, labels in val_loader:
-                outputs = model(images)
-                _, predicted = torch.max(outputs.data, 1)
-                total_val += labels.size(0)
-                correct_val += (predicted == labels).sum().item()
-
-        val_acc = 100 * correct_val / total_val
-
-        print(f"Epoch [{epoch+1}/{num_epochs}] "
-              f"| Loss: {epoch_loss:.4f} "
-              f"| Train Accuracy: {epoch_acc:.2f}% "
-              f"| Validation Accuracy: {val_acc:.2f}%")
-
-    # 3. Save the trained model weights to disk
-    torch.save(model.state_dict(), "thermal_cnn_weights.pth")
-    print("\nTraining Complete. Model weights saved to 'thermal_cnn_weights.pth'.")
+    total_duration = time.time() - start_time
+    print("=" * 60)
+    print(f"[SUCCESS] Training complete in {total_duration:.2f} seconds.")
+    print(f"[SUCCESS] Optimized model weights saved to: {config.WEIGHTS_PATH}")
+    print("=" * 60)
 
 if __name__ == "__main__":
     train_model()

@@ -1,20 +1,21 @@
-# 🛰️ Thermal Target Classification & Real-Time Surveillance Engine
+# Thermal-Target-Detector: Counter-UAS Sky-Facing Classifier
 
-A computer vision pipeline built with PyTorch and OpenCV designed to classify low-contrast aerial thermal targets (Drones vs. Birds) under simulated atmospheric noise conditions.
+An end-to-end computer vision pipeline designed for sky-facing Counter-UAS (Unmanned Aerial Systems) threat detection. The system classifies low-RCS aerial targets (commercial drones) against biological clutter (birds) using a custom PyTorch binary Convolutional Neural Network (CNN) trained on simulated Thermal Infrared (TIR) sensor streams.
 
-## 👁️ Pipeline Architecture
-1. **Preprocessing (CLAHE):** Applies Contrast Limited Adaptive Histogram Equalization across local tile grids to extract faint thermal target edges from noisy infrared backgrounds.
-2. **Deep Learning (Custom CNN):** A convolutional neural network trained on multi-channel feature maps to recognize structural target signatures.
-3. **Real-Time Inference (`detect.py`):** Feeds live synthetic sensor streams through the trained weights, outputting bounding box coordinates and live confidence scores via OpenCV.
+## Key Technical Features
+* **Simulated Thermal Sensor Preprocessing:** Ingests sky-facing optical feeds, converts them to single-channel grayscale to replicate 8-bit uncooled TIR hardware, and applies **CLAHE (Contrast Limited Adaptive Histogram Equalization)** to maximize silhouette and edge contrast against cloud and sky gradients.
+* **Custom Data Pipeline:** Automated PyTorch `Dataset` loader that parses directory structures and maps filename conventions to binary classes (`1` for target drones, `0` for background birds).
+* **Real-Time Visual Inference:** Evaluates batch streams via OpenCV with dynamic confidence scoring and color-coded status overlays (`TARGET DRONE` vs. `BACKGROUND BIRD`).
 
-## 📊 Performance Metrics
-* **Final Validation Accuracy:** 99.50%
-* **Training Accuracy:** 97.38%
+## Project Structure
+* `config.py` - Global configuration parameters (image size, learning rate, batch size).
+* `data_loader.py` - Single-channel grayscale conversion and CLAHE edge-enhancement pipeline.
+* `model.py` - Binary CNN architecture optimized for low-footprint classification.
+* `train.py` - Training script featuring automated weight serialization (`thermal_cnn_weights.pth`).
+* `test_visual.py` - Interactive OpenCV batch evaluation and visual overlay tester.
 
-## 🚀 Execution
-```bash
-# Train the Convolutional Neural Network
-python train.py
-
-# Launch the real-time OpenCV detection surveillance window
-python detect.py
+## Quickstart
+1. Place training data in the `data/` directory (prefix target drone files with `target_`).
+2. Train the model:
+   ```bash
+   python train.py
